@@ -69,14 +69,36 @@
   .tag.deload{ background:var(--warn-soft); color:var(--warn) }
   .tag.adj{ background:var(--bg3); color:var(--ink-dim) }
 
+  /* ---- vue d'ensemble de la semaine ----
+     Une carte par séance, rien de déplié : la semaine est un sommaire, la
+     séance est une page. */
+  .cartes{ display:grid; gap:10px; grid-template-columns:1fr }
+  @media (min-width:620px){ .cartes{ grid-template-columns:1fr 1fr } }
+  .carte{ display:block; width:100%; text-align:left; padding:15px 16px; border-radius:14px;
+    background:var(--bg2); border:1px solid var(--line); box-shadow:var(--ombre); font:inherit }
+  .carte:hover{ border-color:var(--accent-line); background:var(--bg2) }
+  .carte.current{ border-color:var(--accent-line); box-shadow:0 0 0 2px var(--accent-soft), var(--ombre) }
+  .carte.fini{ opacity:.62 }
+  .carte-haut{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:5px }
+  .carte-nom{ font-size:1.06rem; font-weight:680; letter-spacing:-.015em; flex:1 }
+  .carte-sous{ font-size:.76rem; color:var(--ink-faint) }
+  .carte-focus{ font-size:.82rem; color:var(--ink-dim); line-height:1.5; margin-top:7px }
+  .carte-bas{ display:flex; align-items:center; gap:10px; margin-top:12px }
+  .carte-jauge{ flex:1; height:4px; background:var(--line); border-radius:3px; overflow:hidden }
+  .carte-jauge > i{ display:block; height:100%; background:var(--accent) }
+  .carte-compte{ font-size:.78rem; color:var(--ink-dim); font-variant-numeric:tabular-nums }
+  .tag.ok{ background:var(--ok-soft); color:var(--ok) }
+
   /* ---- mode séance ----
      Le bandeau du haut est collant : titre, boutons, semaine, pastilles et
      règle de progression restent donc à l'écran pendant toute la séance, et
      mangent la moitié d'un téléphone. En mode séance il ne reste qu'une barre
      de progression, et les autres séances ne sont pas rendues du tout. */
-  body.focus header, body.focus .aide, body.focus .seance-head{ display:none }
-  body.focus .seance{ border:0; box-shadow:none; background:transparent; margin:0 }
+  body.focus header, body.focus .aide{ display:none }
   body.focus main{ padding-top:0 }
+  /* En page dédiée, la séance occupe l'écran : le cadre de carte n'a plus
+     rien à délimiter. */
+  body.focus .seance{ border:0; box-shadow:none; background:transparent; margin:0; padding:0 }
 
   .focus-barre{ position:sticky; top:0; z-index:6; display:flex; align-items:center; gap:12px;
     padding:12px 0 10px; background:rgba(250,246,240,.94); backdrop-filter:saturate(1.6) blur(10px) }
@@ -113,16 +135,8 @@
   .seance{ background:var(--bg2); border:1px solid var(--line); border-radius:14px; margin-bottom:12px;
     overflow:hidden; box-shadow:var(--ombre) }
   .seance.current{ border-color:var(--accent-line); box-shadow:var(--ombre-forte) }
-  .seance-head{ display:flex; align-items:center; justify-content:space-between; padding:14px 16px; cursor:pointer; gap:10px }
-  .seance.current .seance-head{ background:var(--accent-soft) }
-  .seance-head h2{ font-size:1.02rem; margin:0; display:flex; align-items:center; gap:8px; flex-wrap:wrap; letter-spacing:-.01em }
-  .seance-meta{ font-size:.8rem; color:var(--ink-dim); white-space:nowrap; font-variant-numeric:tabular-nums }
-  .chev{ color:var(--ink-faint); transition:transform .15s; font-size:1.15rem }
-  .seance.open .chev{ transform:rotate(90deg) }
   .seance-body{ display:none; padding:2px 16px 16px }
   .seance.open .seance-body{ display:block }
-  .seance-jours{ font-size:.76rem; color:var(--ink-faint); margin:10px 0 2px }
-  .seance-focus{ font-size:.78rem; color:var(--ink-dim); line-height:1.55; margin-bottom:10px }
 
   .contexte{ background:var(--bg3); border-radius:10px; padding:11px; margin-bottom:12px;
     display:grid; grid-template-columns:1fr 1fr; gap:9px }
@@ -729,45 +743,54 @@ function render(){
   if(courante === -1) courante = 0;
 
   if(focusSeance !== null && !seances[focusSeance]) focusSeance = null;
-  const enFocus = focusSeance !== null;
-  document.body.classList.toggle('focus', enFocus);
+  document.body.classList.toggle('focus', focusSeance !== null);
 
-  const cartes = (enFocus ? [focusSeance] : seances.map((_, i) => i)).map(si => {
-    const s = seances[si];
-    const [faits, total] = avancement(s);
-    const estCourante = si === courante;
-    const jours = (s.jours_semaine || []).join(', ');
+  // Le contrôle du lendemain se remplit le jour d'après, pas pendant : il n'a
+  // rien à faire sous les yeux en salle.
+  contentEl.innerHTML = focusSeance !== null
+    ? pageSeance(seances[focusSeance], focusSeance)
+    : `<div class="cartes">${seances.map((s, si) =>
+        carteSeance(s, si, si === courante, semaine.deload)).join('')}</div>`
+      + rendreSuivi24h();
+}
 
-    return `
-    <div class="seance ${enFocus || estCourante ? 'open' : ''} ${estCourante ? 'current' : ''}" id="seance-${si}">
-      <div class="seance-head" onclick="basculerSeance(${si})">
-        <h2>${echapper(s.jour_type)}
-          ${estCourante ? '<span class="tag">en cours</span>' : ''}
-          ${semaine.deload ? '<span class="tag deload">décharge</span>' : ''}
-        </h2>
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="seance-meta">${faits}/${total}</span>
-          <span class="chev">›</span>
-        </div>
-      </div>
+function carteSeance(s, si, estCourante, deload){
+  const [faits, total] = avancement(s);
+  const fini = total > 0 && faits === total;
+  const jours = (s.jours_semaine || []).join(', ');
+  const duree = s.duree_estimee_min ? `~${s.duree_estimee_min} min` : '';
+  return `
+  <button class="carte ${estCourante && !fini ? 'current' : ''} ${fini ? 'fini' : ''}"
+          id="carte-${si}" onclick="entrerFocus(${si})">
+    <div class="carte-haut">
+      <span class="carte-nom">${echapper(s.jour_type)}</span>
+      ${fini ? '<span class="tag ok">terminée</span>'
+             : estCourante ? '<span class="tag">à faire</span>' : ''}
+      ${deload ? '<span class="tag deload">décharge</span>' : ''}
+    </div>
+    ${jours || duree ? `<div class="carte-sous">${
+      [jours, duree].filter(Boolean).join(' · ')}</div>` : ''}
+    ${s.focus ? `<div class="carte-focus">${echapper(s.focus)}</div>` : ''}
+    <div class="carte-bas">
+      <div class="carte-jauge"><i style="width:${
+        total ? Math.round(100 * faits / total) : 0}%"></i></div>
+      <span class="carte-compte">${faits}/${total}</span>
+    </div>
+  </button>`;
+}
+
+function pageSeance(s, si){
+  return barreFocus(s) + `
+    <div class="seance open" id="seance-${si}">
       <div class="seance-body">
-        ${enFocus ? '' : `<button class="btn-focus primary" onclick="entrerFocus(${si})">Démarrer cette séance</button>`}
-        ${jours ? `<div class="seance-jours">${jours}${s.duree_estimee_min ? ' · ~' + s.duree_estimee_min + ' min' : ''}</div>` : ''}
-        ${s.focus ? `<div class="seance-focus">${echapper(s.focus)}</div>` : ''}
         ${rendreContexte(s.jour_type)}
         ${(s.echauffement || []).length ? `<div class="bloc-titre">Échauffement</div>
           ${s.echauffement.map((e, ei) => rendreExo(s.jour_type, e, ei, `${si}-w`)).join('')}` : ''}
         <div class="bloc-titre">Séance</div>
         ${(s.exercices || []).map((e, ei) => rendreExo(s.jour_type, e, ei, `${si}-x`)).join('')}
-        ${enFocus ? '<button class="btn-focus" onclick="sortirFocus()">Terminer la séance</button>' : ''}
+        <button class="btn-focus" onclick="sortirFocus()">Terminer la séance</button>
       </div>
     </div>`;
-  }).join('');
-
-  // Le contrôle du lendemain se remplit le jour d'après, pas pendant : il
-  // n'a rien à faire sous les yeux en salle.
-  contentEl.innerHTML = (enFocus ? barreFocus(seances[focusSeance]) : '')
-    + cartes + (enFocus ? '' : rendreSuivi24h());
 }
 
 /* ------------------------------------------------------------------
@@ -783,8 +806,8 @@ function sortirFocus(){
   const i = focusSeance;
   focusSeance = null;
   render();
-  const carte = $(`seance-${i}`);
-  if(carte && carte.scrollIntoView) carte.scrollIntoView({ block: 'start' });
+  const carte = $(`carte-${i}`);
+  if(carte && carte.scrollIntoView) carte.scrollIntoView({ block: 'center' });
 }
 
 function barreFocus(s){
@@ -805,7 +828,7 @@ function avancement(s){
 }
 
 /* Cocher un exercice ne relance pas render() — ce serait replier les séries en
-   cours de saisie. Les compteurs sont donc rafraîchis à la main. */
+   cours de saisie. La barre de progression est donc rafraîchie à la main. */
 function majAvancement(jourType){
   const st = (programme.seances_types || []).find(t => t.jour_type === jourType);
   if(!st) return;
@@ -813,12 +836,8 @@ function majAvancement(jourType){
   const compte = $('focusCompte'), jauge = $('focusJauge');
   if(compte) compte.textContent = `${faits}/${total}`;
   if(jauge) jauge.style.width = (total ? Math.round(100 * faits / total) : 0) + '%';
-  const meta = document.querySelector(`#seance-${
-    (programme.seances_types || []).findIndex(t => t.jour_type === jourType)} .seance-meta`);
-  if(meta) meta.textContent = `${faits}/${total}`;
 }
 
-function basculerSeance(i){ $(`seance-${i}`).classList.toggle('open'); }
 function basculerExo(prefixe, i){ $(`exo-${prefixe}-${i}`).classList.toggle('expanded'); }
 
 function basculerFait(jourType, exoId, el){
