@@ -376,6 +376,9 @@ const contentEl = $('content');
 const echapper = s => String(s ?? '').replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const aujourdhui = () => new Date().toISOString().slice(0,10);
+/* Heure locale, pas UTC : une séance de 20 h ne doit pas s'enregistrer à
+   minuit passé. */
+const maintenant = () => new Date().toTimeString().slice(0,5);
 
 /* ------------------------------------------------------------------
    Résolution semaine : la séance type est la référence, la semaine
@@ -430,6 +433,7 @@ function getSeance(jourType){
       // Ni date ni identifiant à la création : voir marquer().
       id_seance: null,
       date: null,
+      heure_fin: null,
       semaine: semaineActuelle,
       jour_type: jourType,
       statut: 'complete',
@@ -707,9 +711,20 @@ function exosFaits(seanceRef){
    s'en sert pour refuser de valider un mouvement suivi d'une douleur
    persistante. Sans eux, la règle des 24 h ne bloque rien. */
 
+/* Une séance est terminée parce que Guillaume l'a déclarée, pas parce que
+   tous les exercices sont cochés : en sauter un volontairement ne doit pas
+   laisser la séance éternellement « à faire ». */
 function seanceTerminee(seance){
-  const tous = [...(seance.echauffement || []), ...(seance.exercices || [])];
-  return tous.length > 0 && tous.every(e => getExo(seance.jour_type, e).fait);
+  const s = etat.seances[cleSeance(seance.jour_type)];
+  return !!(s && s.heure_fin);
+}
+
+function terminerSeance(jourType){
+  const s = getSeance(jourType);
+  s.heure_fin = s.heure_fin ? null : maintenant();
+  marquer(jourType);
+  sauvegarder();
+  if(s.heure_fin) sortirFocus(); else render();
 }
 
 function render(){
@@ -743,7 +758,7 @@ function render(){
 
 function carteSeance(s, si, estCourante, deload){
   const [faits, total] = avancement(s);
-  const fini = total > 0 && faits === total;
+  const fini = seanceTerminee(s);
   const jours = (s.jours_semaine || []).join(', ');
   const duree = s.duree_estimee_min ? `~${s.duree_estimee_min} min` : '';
   return `
@@ -751,7 +766,8 @@ function carteSeance(s, si, estCourante, deload){
           id="carte-${si}" onclick="entrerFocus(${si})">
     <div class="carte-haut">
       <span class="carte-nom">${echapper(s.jour_type)}</span>
-      ${fini ? '<span class="tag ok">terminée</span>'
+      ${fini ? `<span class="tag ok">terminée${
+                 faits < total ? ` · ${total - faits} sautés` : ''}</span>`
              : estCourante ? '<span class="tag">à faire</span>' : ''}
       ${deload ? '<span class="tag deload">décharge</span>' : ''}
     </div>
@@ -787,7 +803,9 @@ function pageSeance(s, si){
         <div class="bloc-titre">Séance</div>
         ${(s.exercices || []).map((e, ei) => rendreExo(s.jour_type, e, ei, `${si}-x`)).join('')}
         ${bilanSeance(s.jour_type)}
-        <button class="btn-focus" onclick="sortirFocus()">Terminer la séance</button>
+        ${seanceTerminee(s)
+          ? `<button class="btn-focus ghost" onclick="terminerSeance('${s.jour_type}')">Rouvrir la séance</button>`
+          : `<button class="btn-focus primary" onclick="terminerSeance('${s.jour_type}')">Terminer la séance</button>`}
       </div>
     </div>`;
 }
@@ -1029,6 +1047,7 @@ function construireJournal(){
     .map(s => ({
       id_seance: s.id_seance,
       date: s.date,
+      heure_fin: s.heure_fin || undefined,
       duree_min: s.duree_min,
       programme_version: programme.version,
       semaine: s.semaine,
@@ -1309,6 +1328,7 @@ function reimporterSeance(s){
   etat.seances[`${s.semaine}__${s.jour_type}`] = {
     id_seance: s.id_seance,
     date: s.date,
+    heure_fin: s.heure_fin ?? null,
     semaine: s.semaine,
     jour_type: s.jour_type,
     statut: s.statut || 'complete',
