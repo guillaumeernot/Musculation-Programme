@@ -69,6 +69,25 @@
   .tag.deload{ background:var(--warn-soft); color:var(--warn) }
   .tag.adj{ background:var(--bg3); color:var(--ink-dim) }
 
+  /* ---- mode séance ----
+     Le bandeau du haut est collant : titre, boutons, semaine, pastilles et
+     règle de progression restent donc à l'écran pendant toute la séance, et
+     mangent la moitié d'un téléphone. En mode séance il ne reste qu'une barre
+     de progression, et les autres séances ne sont pas rendues du tout. */
+  body.focus header, body.focus .aide, body.focus .seance-head{ display:none }
+  body.focus .seance{ border:0; box-shadow:none; background:transparent; margin:0 }
+  body.focus main{ padding-top:0 }
+
+  .focus-barre{ position:sticky; top:0; z-index:6; display:flex; align-items:center; gap:12px;
+    padding:12px 0 10px; background:rgba(250,246,240,.94); backdrop-filter:saturate(1.6) blur(10px) }
+  .focus-barre button{ padding:7px 12px; font-size:1rem; line-height:1 }
+  .focus-barre .titre{ flex:1; font-weight:650; font-size:1.02rem; letter-spacing:-.015em }
+  .focus-barre .compte{ font-size:.82rem; color:var(--ink-dim); font-variant-numeric:tabular-nums }
+  .focus-jauge{ position:sticky; top:52px; z-index:6; height:3px; background:var(--line);
+    border-radius:2px; overflow:hidden; margin-bottom:16px }
+  .focus-jauge > i{ display:block; height:100%; width:0; background:var(--accent); transition:width .18s }
+  .btn-focus{ width:100%; margin:2px 0 14px; font-weight:600 }
+
   /* ---- aide ---- */
   .aide{ background:var(--bg2); border:1px solid var(--line); border-radius:14px; padding:0;
     margin-bottom:14px; box-shadow:var(--ombre); overflow:hidden }
@@ -287,6 +306,7 @@ const TYPES_CHARGE = ["kg","poids_du_corps","poids_du_corps_lestee","assistance_
 
 let programme = null;
 let semaineActuelle = 1;
+let focusSeance = null;
 
 /* état de saisie, en mémoire — remplacé par IndexedDB au portage */
 const etat = { seances: {}, suivis24h: [] };
@@ -708,25 +728,30 @@ function render(){
   let courante = seances.findIndex(s => !seanceTerminee(s));
   if(courante === -1) courante = 0;
 
-  contentEl.innerHTML = seances.map((s, si) => {
-    const tous = [...(s.echauffement || []), ...(s.exercices || [])];
-    const faits = tous.filter(e => getExo(s.jour_type, e).fait).length;
+  if(focusSeance !== null && !seances[focusSeance]) focusSeance = null;
+  const enFocus = focusSeance !== null;
+  document.body.classList.toggle('focus', enFocus);
+
+  const cartes = (enFocus ? [focusSeance] : seances.map((_, i) => i)).map(si => {
+    const s = seances[si];
+    const [faits, total] = avancement(s);
     const estCourante = si === courante;
     const jours = (s.jours_semaine || []).join(', ');
 
     return `
-    <div class="seance ${estCourante ? 'open current' : ''}" id="seance-${si}">
+    <div class="seance ${enFocus || estCourante ? 'open' : ''} ${estCourante ? 'current' : ''}" id="seance-${si}">
       <div class="seance-head" onclick="basculerSeance(${si})">
         <h2>${echapper(s.jour_type)}
           ${estCourante ? '<span class="tag">en cours</span>' : ''}
           ${semaine.deload ? '<span class="tag deload">décharge</span>' : ''}
         </h2>
         <div style="display:flex;align-items:center;gap:10px">
-          <span class="seance-meta">${faits}/${tous.length}</span>
+          <span class="seance-meta">${faits}/${total}</span>
           <span class="chev">›</span>
         </div>
       </div>
       <div class="seance-body">
+        ${enFocus ? '' : `<button class="btn-focus primary" onclick="entrerFocus(${si})">Démarrer cette séance</button>`}
         ${jours ? `<div class="seance-jours">${jours}${s.duree_estimee_min ? ' · ~' + s.duree_estimee_min + ' min' : ''}</div>` : ''}
         ${s.focus ? `<div class="seance-focus">${echapper(s.focus)}</div>` : ''}
         ${rendreContexte(s.jour_type)}
@@ -734,14 +759,64 @@ function render(){
           ${s.echauffement.map((e, ei) => rendreExo(s.jour_type, e, ei, `${si}-w`)).join('')}` : ''}
         <div class="bloc-titre">Séance</div>
         ${(s.exercices || []).map((e, ei) => rendreExo(s.jour_type, e, ei, `${si}-x`)).join('')}
+        ${enFocus ? '<button class="btn-focus" onclick="sortirFocus()">Terminer la séance</button>' : ''}
       </div>
     </div>`;
-  }).join('') + rendreSuivi24h();
+  }).join('');
+
+  // Le contrôle du lendemain se remplit le jour d'après, pas pendant : il
+  // n'a rien à faire sous les yeux en salle.
+  contentEl.innerHTML = (enFocus ? barreFocus(seances[focusSeance]) : '')
+    + cartes + (enFocus ? '' : rendreSuivi24h());
 }
 
 /* ------------------------------------------------------------------
    Interactions
 ------------------------------------------------------------------- */
+
+/* Mode séance : on n'affiche plus que la séance en cours, sans l'en-tête
+   collant. Volontairement non persisté — au retour dans l'app on veut revoir
+   le programme et choisir, pas se retrouver enfermé dans la séance de la
+   veille. */
+function entrerFocus(i){ focusSeance = i; scrollTo(0, 0); render(); }
+function sortirFocus(){
+  const i = focusSeance;
+  focusSeance = null;
+  render();
+  const carte = $(`seance-${i}`);
+  if(carte && carte.scrollIntoView) carte.scrollIntoView({ block: 'start' });
+}
+
+function barreFocus(s){
+  const [faits, total] = avancement(s);
+  return `
+    <div class="focus-barre">
+      <button onclick="sortirFocus()" title="Revenir au programme">◀</button>
+      <span class="titre">${echapper(s.jour_type)}</span>
+      <span class="compte" id="focusCompte">${faits}/${total}</span>
+    </div>
+    <div class="focus-jauge"><i id="focusJauge" style="width:${
+      total ? Math.round(100 * faits / total) : 0}%"></i></div>`;
+}
+
+function avancement(s){
+  const tous = [...(s.echauffement || []), ...(s.exercices || [])];
+  return [tous.filter(e => getExo(s.jour_type, e).fait).length, tous.length];
+}
+
+/* Cocher un exercice ne relance pas render() — ce serait replier les séries en
+   cours de saisie. Les compteurs sont donc rafraîchis à la main. */
+function majAvancement(jourType){
+  const st = (programme.seances_types || []).find(t => t.jour_type === jourType);
+  if(!st) return;
+  const [faits, total] = avancement(seancePourSemaine(st, semaineActuelle));
+  const compte = $('focusCompte'), jauge = $('focusJauge');
+  if(compte) compte.textContent = `${faits}/${total}`;
+  if(jauge) jauge.style.width = (total ? Math.round(100 * faits / total) : 0) + '%';
+  const meta = document.querySelector(`#seance-${
+    (programme.seances_types || []).findIndex(t => t.jour_type === jourType)} .seance-meta`);
+  if(meta) meta.textContent = `${faits}/${total}`;
+}
 
 function basculerSeance(i){ $(`seance-${i}`).classList.toggle('open'); }
 function basculerExo(prefixe, i){ $(`exo-${prefixe}-${i}`).classList.toggle('expanded'); }
@@ -753,6 +828,7 @@ function basculerFait(jourType, exoId, el){
   if(el.checked) s.exercices[exoId].motif_non_fait = null;
   marquer(jourType);
   el.closest('.exo').classList.toggle('done', el.checked);
+  majAvancement(jourType);
 }
 
 function majSerie(jourType, exoId, i, champ, valeur){
