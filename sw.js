@@ -1,5 +1,5 @@
 /* Généré par outils/construire_pwa.py — ne pas modifier à la main. */
-const CACHE = 'carnet-08ee048fd0';
+const CACHE = 'carnet-8ad9cd8949';
 const COQUILLE = ["./", "index.html", "manifest.webmanifest", "icone-192.png", "icone-512.png"];
 
 self.addEventListener('install', e => {
